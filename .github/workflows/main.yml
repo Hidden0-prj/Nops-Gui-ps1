@@ -34,8 +34,22 @@ jobs:
           --add-data "comport.txt;." `
           nops_gui.py
 
-    - name: Upload Executable Artifact
+    - name: Create Self-Signed Cert and Sign Executable
+      shell: powershell
+      run: |
+        # Generate code-signing certificate on the runner
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Nops Gui Launcher" -CertStoreLocation "Cert:\CurrentUser\My"
+        
+        # Digitally sign the nops_gui.exe binary
+        Set-AuthenticodeSignature -FilePath "dist\nops_gui.exe" -Certificate $cert
+        
+        # Export the public certificate file (.cer) so you can trust it locally
+        Export-Certificate -Cert $cert -FilePath "dist\NopsGuiLauncher.cer"
+
+    - name: Upload Signed Executable & Certificate Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Nops-Gui-Launcher-x64
-        path: dist/nops_gui.exe
+        name: Nops-Gui-Launcher-Signed-x64
+        path: |
+          dist/nops_gui.exe
+          dist/NopsGuiLauncher.cer

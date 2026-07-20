@@ -30,8 +30,8 @@ class NopsGui:
     def __init__(self, root):
         self.root = root
         self.root.title("Nops Gui Launcher")
-        self.root.geometry("720x540")
-        self.root.minsize(600, 440)
+        self.root.geometry("720x560")
+        self.root.minsize(600, 460)
 
         self.process = None
         self.reader_thread = None
@@ -133,15 +133,29 @@ class NopsGui:
 
         # Action Buttons
         frame_buttons = ttk.Frame(self.root)
-        frame_buttons.pack(fill="x", padx=8, pady=4)
-        self.run_btn = ttk.Button(
-            frame_buttons, text="Send / Run", command=self._run
+        frame_buttons.pack(fill="x", padx=8, pady=10)
+
+        # Using standard tk.Button here to allow double-height, bold font, and custom highlight colors
+        self.run_btn = tk.Button(
+            frame_buttons, 
+            text="▶ Send / Run", 
+            command=self._run,
+            font=("Segoe UI", 12, "bold"),
+            bg="#2E8B57", # SeaGreen highlight color
+            fg="white",
+            activebackground="#1E6B40",
+            activeforeground="white",
+            width=16,
+            height=2, # Doubles the size of the button
+            cursor="hand2"
         )
-        self.run_btn.pack(side="left")
+        self.run_btn.pack(side="left", padx=(0, 16))
+
         self.stop_btn = ttk.Button(
             frame_buttons, text="Stop", command=self._stop, state="disabled"
         )
         self.stop_btn.pack(side="left", padx=6)
+        
         ttk.Button(
             frame_buttons, text="Clear output", command=self._clear_output
         ).pack(side="left", padx=6)
@@ -305,7 +319,7 @@ class NopsGui:
                 data = json.load(f)
             self.target_exe_path.set(data.get("target_exe_path", ""))
             self.flag_m.set(data.get("flag_m", True))
-            self.flag_debug.set(data.get("flag_debug", False)) # Default override
+            self.flag_debug.set(data.get("flag_debug", False))
             self.extra_flags.set(data.get("extra_flags", ""))
         except Exception:
             pass

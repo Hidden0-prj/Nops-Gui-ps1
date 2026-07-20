@@ -33,6 +33,9 @@ class NopsGui:
         self.root.geometry("720x560")
         self.root.minsize(600, 460)
 
+        # Capture the system's default background color for toggling back to light mode
+        self.default_bg = self.root.cget("bg")
+
         self.process = None
         self.reader_thread = None
         self.stop_flag = threading.Event()
@@ -42,12 +45,18 @@ class NopsGui:
 
         self.target_exe_path = tk.StringVar()
         self.flag_m = tk.BooleanVar(value=True)
-        self.flag_debug = tk.BooleanVar(value=False) # Unchecked by default
+        self.flag_debug = tk.BooleanVar(value=False)
         self.extra_flags = tk.StringVar()
+        
+        # New variable to track and save the dark mode preference
+        self.is_dark_mode = tk.BooleanVar(value=False)
 
         self._load_config()
         self._build_ui()
         self._check_startup_args()
+        
+        # Apply theme immediately on startup based on loaded config
+        self._apply_theme()
 
         # Hook drag and drop to the main window
         if windnd:
@@ -116,11 +125,12 @@ class NopsGui:
         frame_flags.columnconfigure(0, weight=1)
         frame_flags.columnconfigure(1, weight=1)
 
-        # Command Preview
+        # Command Preview (switched to standard tk.Label to easily accept background color changes)
         self.preview_var = tk.StringVar()
-        ttk.Label(
-            self.root, textvariable=self.preview_var, foreground="#555"
-        ).pack(fill="x", padx=12)
+        self.preview_label = tk.Label(
+            self.root, textvariable=self.preview_var, fg="#555", anchor="w"
+        )
+        self.preview_label.pack(fill="x", padx=12)
         
         for var in (
             self.target_exe_path,
@@ -160,6 +170,12 @@ class NopsGui:
             frame_buttons, text="Clear output", command=self._clear_output
         ).pack(side="left", padx=6)
 
+        # Theme Toggle Button
+        self.dark_mode_btn = ttk.Button(
+            frame_buttons, text="🌙 Dark Mode", command=self._toggle_dark_mode
+        )
+        self.dark_mode_btn.pack(side="right", padx=6)
+
         # Output Console
         frame_out = ttk.LabelFrame(self.root, text="Output")
         frame_out.pack(fill="both", expand=True, padx=8, pady=6)
@@ -176,6 +192,57 @@ class NopsGui:
         self.output.config(yscrollcommand=scroll.set)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ---------- Theming ----------
+    def _toggle_dark_mode(self):
+        self.is_dark_mode.set(not self.is_dark_mode.get())
+        self._apply_theme()
+        self._save_config()
+
+    def _apply_theme(self):
+        style = ttk.Style()
+        
+        if self.is_dark_mode.get():
+            try:
+                # "clam" is a built-in cross-platform theme that accepts background color overrides well
+                style.theme_use("clam")
+            except Exception:
+                pass
+            
+            bg_color = "#2d2d2d"
+            fg_color = "#ffffff"
+            input_bg = "#1e1e1e"
+            
+            self.root.configure(bg=bg_color)
+            style.configure(".", background=bg_color, foreground=fg_color, fieldbackground=input_bg, insertcolor=fg_color)
+            style.configure("TFrame", background=bg_color)
+            style.configure("TLabelframe", background=bg_color, foreground=fg_color, bordercolor="#555555")
+            style.configure("TLabelframe.Label", background=bg_color, foreground=fg_color)
+            style.configure("TButton", background="#3d3d3d", foreground=fg_color, bordercolor=bg_color)
+            style.map("TButton", background=[("active", "#4d4d4d")])
+            style.configure("TCheckbutton", background=bg_color, foreground=fg_color)
+            style.map("TCheckbutton", background=[("active", "#3d3d3d")], indicatorcolor=[("selected", "#4a90e2")])
+            
+            self.preview_label.config(fg="#999999", bg=bg_color)
+            self.dark_mode_btn.config(text="☀️ Light Mode")
+            
+        else:
+            self.root.configure(bg=self.default_bg)
+            try:
+                # Return to standard Windows theme
+                style.theme_use("vista") 
+            except Exception:
+                style.theme_use("default")
+            
+            # Clear manual overrides to let the OS theme take back control
+            style.configure(".", background=self.default_bg, foreground="black", fieldbackground="white", insertcolor="black")
+            style.configure("TFrame", background=self.default_bg)
+            style.configure("TLabelframe", background=self.default_bg, foreground="black")
+            style.configure("TLabelframe.Label", background=self.default_bg, foreground="black")
+            style.configure("TCheckbutton", background=self.default_bg, foreground="black")
+            
+            self.preview_label.config(fg="#555555", bg=self.default_bg)
+            self.dark_mode_btn.config(text="🌙 Dark Mode")
 
     def _pick_target(self):
         path = filedialog.askopenfilename(
@@ -304,6 +371,7 @@ class NopsGui:
             "flag_m": self.flag_m.get(),
             "flag_debug": self.flag_debug.get(),
             "extra_flags": self.extra_flags.get(),
+            "dark_mode": self.is_dark_mode.get(),
         }
         try:
             with open(CONFIG_PATH, "w") as f:
@@ -321,6 +389,7 @@ class NopsGui:
             self.flag_m.set(data.get("flag_m", True))
             self.flag_debug.set(data.get("flag_debug", False))
             self.extra_flags.set(data.get("extra_flags", ""))
+            self.is_dark_mode.set(data.get("dark_mode", False))
         except Exception:
             pass
 

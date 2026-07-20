@@ -1,11 +1,11 @@
-name: Build Windows Executable
+name: Build Standalone Windows Executable
 
 on:
   push:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch:  # Allows manual triggering from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
@@ -25,12 +25,17 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller
 
-    - name: Build Executable with PyInstaller
+    - name: Build Executable with Embedded Assets
       run: |
-        pyinstaller --noconsole --onefile nops_gui.py
+        pyinstaller --noconsole --onefile `
+          --add-data "nops.exe;." `
+          --add-data "ELFSharp.dll;." `
+          --add-data "nops;." `
+          --add-data "comport.txt;." `
+          nops_gui.py
 
     - name: Upload Executable Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: nops_gui-windows-x64
+        name: nops_gui-standalone-x64
         path: dist/nops_gui.exe

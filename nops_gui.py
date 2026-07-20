@@ -1,23 +1,11 @@
 """
-nops_gui.py - A simple Windows GUI wrapper around nops.exe for PlayStation 1 dev.
-
-Requirements:
-    - Python 3.x with tkinter (included in standard Windows Python installs)
-    - nops.exe somewhere on disk (you'll point the GUI at it once, then it's remembered)
-
-Usage:
-    python nops_gui.py
-
-What it does:
-    Builds a command line like:
-        nops.exe /exe your_file.exe /m /debug [extra flags]
-    launches it as a subprocess, and streams stdout/stderr live into a
-    scrolling text box so you don't need to babysit a terminal window.
+nops_gui.py - Standalone GUI wrapper around nops.exe for PlayStation 1 dev.
 """
 
 import json
 import os
 import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -25,12 +13,19 @@ from tkinter import filedialog, messagebox, ttk
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".nops_gui_config.json")
 
 
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller bundle"""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+
 class NopsGui:
     def __init__(self, root):
         self.root = root
         self.root.title("nops.exe launcher")
-        self.root.geometry("720x520")
-        self.root.minsize(600, 420)
+        self.root.geometry("720x540")
+        self.root.minsize(600, 440)
 
         self.process = None
         self.reader_thread = None
@@ -43,75 +38,109 @@ class NopsGui:
         self.extra_flags = tk.StringVar()
 
         self._load_config()
+        self._check_bundled_nops()
         self._build_ui()
+
+    def _check_bundled_nops(self):
+        """Auto-detect bundled nops.exe or local nops.exe in current folder"""
+        bundled_nops = get_resource_path("nops.exe")
+        if os.path.isfile(bundled_nops):
+            self.nops_path.set(bundled_nops)
 
     # ---------- UI ----------
     def _build_ui(self):
         pad = {"padx": 8, "pady": 6}
 
-        # nops.exe location
+        # nops.exe location (Auto-detected if bundled)
         frame_nops = ttk.LabelFrame(self.root, text="nops.exe location")
         frame_nops.pack(fill="x", **pad)
-        ttk.Entry(frame_nops, textvariable=self.nops_path).pack(
-            side="left", fill="x", expand=True, padx=6, pady=6
+
+        entry_nops = ttk.Entry(
+            frame_nops, textvariable=self.nops_path, state="readonly"
         )
+        entry_nops.pack(side="left", fill="x", expand=True, padx=6, pady=6)
+
+        # Allow override standard browse button only if not bundled or needed
         ttk.Button(frame_nops, text="Browse...", command=self._pick_nops).pack(
             side="left", padx=6, pady=6
         )
 
-        # target exe to send
-        frame_target = ttk.LabelFrame(self.root, text="EXE to send (/exe)")
+        # Target EXE/PSEXE to send
+        frame_target = ttk.LabelFrame(
+            self.root, text="PS1 Executable to send (/exe)"
+        )
         frame_target.pack(fill="x", **pad)
         ttk.Entry(frame_target, textvariable=self.target_exe_path).pack(
             side="left", fill="x", expand=True, padx=6, pady=6
         )
-        ttk.Button(frame_target, text="Browse...", command=self._pick_target).pack(
-            side="left", padx=6, pady=6
-        )
+        ttk.Button(
+            frame_target, text="Browse...", command=self._pick_target
+        ).pack(side="left", padx=6, pady=6)
 
-        # flags
+        # Flags
         frame_flags = ttk.LabelFrame(self.root, text="Flags")
         frame_flags.pack(fill="x", **pad)
         ttk.Checkbutton(
-            frame_flags, text="/m  (monitor serial for output)", variable=self.flag_m
+            frame_flags,
+            text="/m  (monitor serial for output)",
+            variable=self.flag_m,
         ).grid(row=0, column=0, sticky="w", padx=6, pady=4)
         ttk.Checkbutton(
-            frame_flags, text="/debug  (boot PS1 into debug mode)", variable=self.flag_debug
+            frame_flags,
+            text="/debug  (boot PS1 into debug mode)",
+            variable=self.flag_debug,
         ).grid(row=0, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(frame_flags, text="Extra flags (typed exactly as you'd pass on the command line):").grid(
-            row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 0)
-        )
+        ttk.Label(
+            frame_flags,
+            text="Extra flags (e.g., COM5 or custom parameters):",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 0))
         ttk.Entry(frame_flags, textvariable=self.extra_flags).grid(
             row=2, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 6)
         )
         frame_flags.columnconfigure(0, weight=1)
         frame_flags.columnconfigure(1, weight=1)
 
-        # command preview
+        # Command Preview
         self.preview_var = tk.StringVar()
-        ttk.Label(self.root, textvariable=self.preview_var, foreground="#555").pack(
-            fill="x", padx=12
-        )
-        for var in (self.nops_path, self.target_exe_path, self.flag_m, self.flag_debug, self.extra_flags):
+        ttk.Label(
+            self.root, textvariable=self.preview_var, foreground="#555"
+        ).pack(fill="x", padx=12)
+        for var in (
+            self.nops_path,
+            self.target_exe_path,
+            self.flag_m,
+            self.flag_debug,
+            self.extra_flags,
+        ):
             var.trace_add("write", lambda *args: self._update_preview())
         self._update_preview()
 
-        # run/stop buttons
+        # Action Buttons
         frame_buttons = ttk.Frame(self.root)
         frame_buttons.pack(fill="x", padx=8, pady=4)
-        self.run_btn = ttk.Button(frame_buttons, text="Send / Run", command=self._run)
-        self.run_btn.pack(side="left")
-        self.stop_btn = ttk.Button(frame_buttons, text="Stop", command=self._stop, state="disabled")
-        self.stop_btn.pack(side="left", padx=6)
-        ttk.Button(frame_buttons, text="Clear output", command=self._clear_output).pack(
-            side="left", padx=6
+        self.run_btn = ttk.Button(
+            frame_buttons, text="Send / Run", command=self._run
         )
+        self.run_btn.pack(side="left")
+        self.stop_btn = ttk.Button(
+            frame_buttons, text="Stop", command=self._stop, state="disabled"
+        )
+        self.stop_btn.pack(side="left", padx=6)
+        ttk.Button(
+            frame_buttons, text="Clear output", command=self._clear_output
+        ).pack(side="left", padx=6)
 
-        # output console
+        # Output Console
         frame_out = ttk.LabelFrame(self.root, text="Output")
         frame_out.pack(fill="both", expand=True, padx=8, pady=6)
-        self.output = tk.Text(frame_out, wrap="word", bg="#111", fg="#0f0", insertbackground="#0f0")
+        self.output = tk.Text(
+            frame_out,
+            wrap="word",
+            bg="#111",
+            fg="#0f0",
+            insertbackground="#0f0",
+        )
         self.output.pack(fill="both", expand=True, side="left")
         scroll = ttk.Scrollbar(frame_out, command=self.output.yview)
         scroll.pack(side="right", fill="y")
@@ -128,8 +157,13 @@ class NopsGui:
             self._save_config()
 
     def _pick_target(self):
+        # Updated to filter both .exe and .psexe files
         path = filedialog.askopenfilename(
-            title="Select PS1 EXE to send", filetypes=[("Executable", "*.exe")]
+            title="Select PS1 Executable to send",
+            filetypes=[
+                ("PS1 Executables (*.exe, *.psexe)", "*.exe;*.psexe"),
+                ("All Files (*.*)", "*.*"),
+            ],
         )
         if path:
             self.target_exe_path.set(path)
@@ -160,20 +194,24 @@ class NopsGui:
         self.output.insert("end", text)
         self.output.see("end")
 
-    # ---------- process handling ----------
+    # ---------- Process Handling ----------
     def _run(self):
         if self.process is not None:
-            messagebox.showinfo("Already running", "nops.exe is already running. Stop it first.")
+            messagebox.showinfo(
+                "Already running", "nops.exe is running. Stop it first."
+            )
             return
 
         nops = self.nops_path.get()
         if not nops or not os.path.isfile(nops):
-            messagebox.showerror("Missing nops.exe", "Please select a valid path to nops.exe.")
+            messagebox.showerror(
+                "Missing nops.exe", "nops.exe could not be found."
+            )
             return
 
         if not self.target_exe_path.get():
             if not messagebox.askyesno(
-                "No EXE selected", "No /exe target selected. Continue anyway?"
+                "No File Selected", "No /exe target selected. Continue?"
             ):
                 return
 
@@ -184,14 +222,18 @@ class NopsGui:
 
         self.stop_flag.clear()
         try:
+            # Set working directory to where nops.exe and DLLs reside
+            nops_dir = os.path.dirname(nops) or None
             self.process = subprocess.Popen(
                 cmd,
-                cwd=os.path.dirname(nops) or None,
+                cwd=nops_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                ),
             )
         except Exception as e:
             messagebox.showerror("Failed to start", str(e))
@@ -201,7 +243,9 @@ class NopsGui:
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
 
-        self.reader_thread = threading.Thread(target=self._read_output, daemon=True)
+        self.reader_thread = threading.Thread(
+            target=self._read_output, daemon=True
+        )
         self.reader_thread.start()
 
     def _read_output(self):
@@ -236,10 +280,9 @@ class NopsGui:
         self._save_config()
         self.root.destroy()
 
-    # ---------- config persistence ----------
+    # ---------- Config Persistence ----------
     def _save_config(self):
         data = {
-            "nops_path": self.nops_path.get(),
             "target_exe_path": self.target_exe_path.get(),
             "flag_m": self.flag_m.get(),
             "flag_debug": self.flag_debug.get(),
@@ -257,7 +300,6 @@ class NopsGui:
         try:
             with open(CONFIG_PATH) as f:
                 data = json.load(f)
-            self.nops_path.set(data.get("nops_path", ""))
             self.target_exe_path.set(data.get("target_exe_path", ""))
             self.flag_m.set(data.get("flag_m", True))
             self.flag_debug.set(data.get("flag_debug", True))

@@ -23,7 +23,7 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller
+        pip install pyinstaller windnd
 
     - name: Build Executable with Embedded Assets
       run: |
@@ -37,5 +37,5 @@ jobs:
     - name: Upload Executable Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: nops_gui-standalone-x64
+        name: Nops-Gui-Launcher-x64
         path: dist/nops_gui.exe

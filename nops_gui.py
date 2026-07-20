@@ -10,6 +10,12 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+# Import windnd for drag-and-drop support on Windows
+try:
+    import windnd
+except ImportError:
+    windnd = None
+
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".nops_gui_config.json")
 
 
@@ -23,7 +29,7 @@ def get_resource_path(relative_path):
 class NopsGui:
     def __init__(self, root):
         self.root = root
-        self.root.title("nops.exe launcher")
+        self.root.title("Nops Gui Launcher")
         self.root.geometry("720x540")
         self.root.minsize(600, 440)
 
@@ -31,43 +37,52 @@ class NopsGui:
         self.reader_thread = None
         self.stop_flag = threading.Event()
 
-        self.nops_path = tk.StringVar()
+        # Hardcode the internal path to the bundled nops.exe
+        self.nops_exe = get_resource_path("nops.exe")
+
         self.target_exe_path = tk.StringVar()
         self.flag_m = tk.BooleanVar(value=True)
-        self.flag_debug = tk.BooleanVar(value=True)
+        self.flag_debug = tk.BooleanVar(value=False) # Unchecked by default
         self.extra_flags = tk.StringVar()
 
         self._load_config()
-        self._check_bundled_nops()
         self._build_ui()
+        self._check_startup_args()
 
-    def _check_bundled_nops(self):
-        """Auto-detect bundled nops.exe or local nops.exe in current folder"""
-        bundled_nops = get_resource_path("nops.exe")
-        if os.path.isfile(bundled_nops):
-            self.nops_path.set(bundled_nops)
+        # Hook drag and drop to the main window
+        if windnd:
+            windnd.hook_dropfiles(self.root, func=self._on_drop)
+            
+        if not os.path.isfile(self.nops_exe):
+            self.root.after(500, lambda: self._append_output(">>> [WARNING] nops.exe not found in bundle directory!\n"))
+
+    def _check_startup_args(self):
+        """Allows dragging and dropping a file onto the application's .exe icon"""
+        if len(sys.argv) > 1:
+            dropped_file = sys.argv[1]
+            if dropped_file.lower().endswith(('.exe', '.psexe')):
+                self.target_exe_path.set(dropped_file)
+
+    def _on_drop(self, files):
+        """Handles dragging and dropping a file directly into the open application window"""
+        if files:
+            try:
+                # windnd returns paths as byte strings, usually MBCS encoded on Windows
+                path = files[0].decode('mbcs')
+            except Exception:
+                path = files[0].decode('utf-8', errors='ignore')
+                
+            if path.lower().endswith(('.exe', '.psexe')):
+                self.target_exe_path.set(path)
+                self._save_config()
 
     # ---------- UI ----------
     def _build_ui(self):
         pad = {"padx": 8, "pady": 6}
 
-        # nops.exe location (Auto-detected if bundled)
-        frame_nops = ttk.LabelFrame(self.root, text="nops.exe location")
-        frame_nops.pack(fill="x", **pad)
-
-        entry_nops = ttk.Entry(
-            frame_nops, textvariable=self.nops_path, state="readonly"
-        )
-        entry_nops.pack(side="left", fill="x", expand=True, padx=6, pady=6)
-
-        # Allow override standard browse button only if not bundled or needed
-        ttk.Button(frame_nops, text="Browse...", command=self._pick_nops).pack(
-            side="left", padx=6, pady=6
-        )
-
         # Target EXE/PSEXE to send
         frame_target = ttk.LabelFrame(
-            self.root, text="PS1 Executable to send (/exe)"
+            self.root, text="PS1 Executable to send (/exe) - [You can Drag & Drop here]"
         )
         frame_target.pack(fill="x", **pad)
         ttk.Entry(frame_target, textvariable=self.target_exe_path).pack(
@@ -106,8 +121,8 @@ class NopsGui:
         ttk.Label(
             self.root, textvariable=self.preview_var, foreground="#555"
         ).pack(fill="x", padx=12)
+        
         for var in (
-            self.nops_path,
             self.target_exe_path,
             self.flag_m,
             self.flag_debug,
@@ -148,16 +163,7 @@ class NopsGui:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _pick_nops(self):
-        path = filedialog.askopenfilename(
-            title="Locate nops.exe", filetypes=[("Executable", "*.exe")]
-        )
-        if path:
-            self.nops_path.set(path)
-            self._save_config()
-
     def _pick_target(self):
-        # Updated to filter both .exe and .psexe files
         path = filedialog.askopenfilename(
             title="Select PS1 Executable to send",
             filetypes=[
@@ -183,9 +189,8 @@ class NopsGui:
         return args
 
     def _update_preview(self):
-        nops = self.nops_path.get() or "nops.exe"
         args = self._build_args()
-        self.preview_var.set("Command: " + " ".join([f'"{nops}"'] + args))
+        self.preview_var.set("Command: nops.exe " + " ".join(args))
 
     def _clear_output(self):
         self.output.delete("1.0", "end")
@@ -202,10 +207,9 @@ class NopsGui:
             )
             return
 
-        nops = self.nops_path.get()
-        if not nops or not os.path.isfile(nops):
+        if not os.path.isfile(self.nops_exe):
             messagebox.showerror(
-                "Missing nops.exe", "nops.exe could not be found."
+                "Missing nops.exe", "The internal nops.exe could not be found."
             )
             return
 
@@ -217,13 +221,12 @@ class NopsGui:
 
         self._save_config()
         args = self._build_args()
-        cmd = [nops] + args
-        self._append_output(f"\n$ {' '.join(cmd)}\n")
+        cmd = [self.nops_exe] + args
+        self._append_output(f"\n$ nops.exe {' '.join(args)}\n")
 
         self.stop_flag.clear()
         try:
-            # Set working directory to where nops.exe and DLLs reside
-            nops_dir = os.path.dirname(nops) or None
+            nops_dir = os.path.dirname(self.nops_exe) or None
             self.process = subprocess.Popen(
                 cmd,
                 cwd=nops_dir,
@@ -302,7 +305,7 @@ class NopsGui:
                 data = json.load(f)
             self.target_exe_path.set(data.get("target_exe_path", ""))
             self.flag_m.set(data.get("flag_m", True))
-            self.flag_debug.set(data.get("flag_debug", True))
+            self.flag_debug.set(data.get("flag_debug", False)) # Default override
             self.extra_flags.set(data.get("extra_flags", ""))
         except Exception:
             pass

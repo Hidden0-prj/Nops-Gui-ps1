@@ -31,7 +31,7 @@ class NopsGui:
         self.root = root
         self.root.title("Nops Gui Launcher")
         self.root.geometry("720x560")
-        self.root.minsize(600, 460)
+        self.root.minsize(680, 460)
 
         # Capture the system's default background color for toggling back to light mode
         self.default_bg = self.root.cget("bg")
@@ -39,6 +39,7 @@ class NopsGui:
         self.process = None
         self.reader_thread = None
         self.stop_flag = threading.Event()
+        self._fast_warned = False  # Track if we already showed the /fast warning
 
         # Hardcode the internal path to the bundled nops.exe
         self.nops_exe = get_resource_path("nops.exe")
@@ -48,17 +49,18 @@ class NopsGui:
         self.flag_debug = tk.BooleanVar(value=False)
         self.extra_flags = tk.StringVar()
         
-        # New variable to track and save the dark mode preference
+        self.com_port = tk.StringVar(value="")
+        self.speed_mode = tk.StringVar(value="Normal")
+        
         self.is_dark_mode = tk.BooleanVar(value=False)
 
         self._load_config()
         self._build_ui()
         self._check_startup_args()
         
-        # Apply theme immediately on startup based on loaded config
+        # Apply theme immediately on startup
         self._apply_theme()
 
-        # Hook drag and drop to the main window
         if windnd:
             windnd.hook_dropfiles(self.root, func=self._on_drop)
             
@@ -66,17 +68,14 @@ class NopsGui:
             self.root.after(500, lambda: self._append_output(">>> [WARNING] nops.exe not found in bundle directory!\n"))
 
     def _check_startup_args(self):
-        """Allows dragging and dropping a file onto the application's .exe icon"""
         if len(sys.argv) > 1:
             dropped_file = sys.argv[1]
             if dropped_file.lower().endswith(('.exe', '.psexe')):
                 self.target_exe_path.set(dropped_file)
 
     def _on_drop(self, files):
-        """Handles dragging and dropping a file directly into the open application window"""
         if files:
             try:
-                # windnd returns paths as byte strings, usually MBCS encoded on Windows
                 path = files[0].decode('mbcs')
             except Exception:
                 path = files[0].decode('utf-8', errors='ignore')
@@ -101,31 +100,47 @@ class NopsGui:
             frame_target, text="Browse...", command=self._pick_target
         ).pack(side="left", padx=6, pady=6)
 
-        # Flags
-        frame_flags = ttk.LabelFrame(self.root, text="Flags")
+        # Flags & Settings
+        frame_flags = ttk.LabelFrame(self.root, text="Settings & Flags")
         frame_flags.pack(fill="x", **pad)
+        
+        # Row 0
         ttk.Checkbutton(
             frame_flags,
-            text="/m  (monitor serial for output)",
+            text="/m  (monitor serial)",
             variable=self.flag_m,
+            command=self._on_m_toggle
         ).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        
         ttk.Checkbutton(
             frame_flags,
-            text="/debug  (boot PS1 into debug mode)",
+            text="/debug  (debug mode)",
             variable=self.flag_debug,
         ).grid(row=0, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(
-            frame_flags,
-            text="Extra flags (e.g., COM5 or custom parameters):",
-        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 0))
-        ttk.Entry(frame_flags, textvariable=self.extra_flags).grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 6)
+        ttk.Label(frame_flags, text="Speed Mode:").grid(row=0, column=2, sticky="e", padx=6, pady=4)
+        self.speed_combo = ttk.Combobox(
+            frame_flags, textvariable=self.speed_mode, 
+            values=["Normal", "/fast", "/slow"], state="readonly", width=12
         )
-        frame_flags.columnconfigure(0, weight=1)
-        frame_flags.columnconfigure(1, weight=1)
+        self.speed_combo.grid(row=0, column=3, sticky="w", padx=6, pady=4)
 
-        # Command Preview (switched to standard tk.Label to easily accept background color changes)
+        # Row 1
+        ttk.Label(frame_flags, text="Manual COM Port:").grid(row=1, column=0, sticky="e", padx=6, pady=4)
+        self.com_combo = ttk.Combobox(
+            frame_flags, textvariable=self.com_port,
+            values=[f"COM{i}" for i in range(1, 30)], width=12
+        )
+        self.com_combo.grid(row=1, column=1, sticky="w", padx=6, pady=4)
+
+        ttk.Label(frame_flags, text="Extra flags:").grid(row=1, column=2, sticky="e", padx=6, pady=4)
+        ttk.Entry(frame_flags, textvariable=self.extra_flags).grid(
+            row=1, column=3, sticky="ew", padx=6, pady=4
+        )
+        
+        frame_flags.columnconfigure(3, weight=1)
+
+        # Command Preview
         self.preview_var = tk.StringVar()
         self.preview_label = tk.Label(
             self.root, textvariable=self.preview_var, fg="#555", anchor="w"
@@ -137,26 +152,30 @@ class NopsGui:
             self.flag_m,
             self.flag_debug,
             self.extra_flags,
+            self.com_port,
+            self.speed_mode
         ):
             var.trace_add("write", lambda *args: self._update_preview())
+        
+        self.speed_mode.trace_add("write", self._on_speed_change)
+        self._on_m_toggle()
         self._update_preview()
 
         # Action Buttons
         frame_buttons = ttk.Frame(self.root)
         frame_buttons.pack(fill="x", padx=8, pady=10)
 
-        # Using standard tk.Button here to allow double-height, bold font, and custom highlight colors
         self.run_btn = tk.Button(
             frame_buttons, 
             text="▶ Send / Run", 
             command=self._run,
             font=("Segoe UI", 12, "bold"),
-            bg="#2E8B57", # SeaGreen highlight color
+            bg="#2E8B57",
             fg="white",
             activebackground="#1E6B40",
             activeforeground="white",
             width=16,
-            height=2, # Doubles the size of the button
+            height=2,
             cursor="hand2"
         )
         self.run_btn.pack(side="left", padx=(0, 16))
@@ -170,7 +189,6 @@ class NopsGui:
             frame_buttons, text="Clear output", command=self._clear_output
         ).pack(side="left", padx=6)
 
-        # Theme Toggle Button
         self.dark_mode_btn = ttk.Button(
             frame_buttons, text="🌙 Dark Mode", command=self._toggle_dark_mode
         )
@@ -193,6 +211,24 @@ class NopsGui:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    # ---------- Dynamic Logic ----------
+    def _on_m_toggle(self):
+        """Greys out the COM port dropdown if /m is selected"""
+        if self.flag_m.get():
+            self.com_combo.config(state="disabled")
+        else:
+            self.com_combo.config(state="normal")
+        self._update_preview()
+
+    def _on_speed_change(self, *args):
+        """Shows hint warning when /fast is selected for the first time"""
+        if self.speed_mode.get() == "/fast" and not self._fast_warned:
+            messagebox.showinfo(
+                "Hint!",
+                "You've specified /fast. Next time you start nops, it has no way of knowing if the ps is in fast mode or not. So remember to use /fast on every command... or not at all! You can switch back and forth in most cases with the following (If you're sick of typing it).\n\nnops /fast\nnops /slow"
+            )
+            self._fast_warned = True
+
     # ---------- Theming ----------
     def _toggle_dark_mode(self):
         self.is_dark_mode.set(not self.is_dark_mode.get())
@@ -201,14 +237,11 @@ class NopsGui:
 
     def _apply_theme(self):
         style = ttk.Style()
-        
         if self.is_dark_mode.get():
             try:
-                # "clam" is a built-in cross-platform theme that accepts background color overrides well
                 style.theme_use("clam")
             except Exception:
                 pass
-            
             bg_color = "#2d2d2d"
             fg_color = "#ffffff"
             input_bg = "#1e1e1e"
@@ -225,16 +258,13 @@ class NopsGui:
             
             self.preview_label.config(fg="#999999", bg=bg_color)
             self.dark_mode_btn.config(text="☀️ Light Mode")
-            
         else:
             self.root.configure(bg=self.default_bg)
             try:
-                # Return to standard Windows theme
                 style.theme_use("vista") 
             except Exception:
                 style.theme_use("default")
             
-            # Clear manual overrides to let the OS theme take back control
             style.configure(".", background=self.default_bg, foreground="black", fieldbackground="white", insertcolor="black")
             style.configure("TFrame", background=self.default_bg)
             style.configure("TLabelframe", background=self.default_bg, foreground="black")
@@ -258,15 +288,29 @@ class NopsGui:
 
     def _build_args(self):
         args = []
+        
+        speed = self.speed_mode.get()
+        if speed in ["/fast", "/slow"]:
+            args.append(speed)
+            
         if self.target_exe_path.get():
             args += ["/exe", self.target_exe_path.get()]
+            
         if self.flag_m.get():
             args.append("/m")
+            
         if self.flag_debug.get():
             args.append("/debug")
+            
         extra = self.extra_flags.get().strip()
         if extra:
             args += extra.split()
+            
+        # Append COM port if NOT disabled by /m
+        com = self.com_port.get().strip()
+        if com and not self.flag_m.get():
+            args.append(com)
+            
         return args
 
     def _update_preview(self):
@@ -294,7 +338,7 @@ class NopsGui:
             )
             return
 
-        if not self.target_exe_path.get():
+        if not self.target_exe_path.get() and not self.flag_m.get():
             if not messagebox.askyesno(
                 "No File Selected", "No /exe target selected. Continue?"
             ):
@@ -372,6 +416,8 @@ class NopsGui:
             "flag_debug": self.flag_debug.get(),
             "extra_flags": self.extra_flags.get(),
             "dark_mode": self.is_dark_mode.get(),
+            "com_port": self.com_port.get(),
+            "speed_mode": self.speed_mode.get(),
         }
         try:
             with open(CONFIG_PATH, "w") as f:
@@ -390,6 +436,8 @@ class NopsGui:
             self.flag_debug.set(data.get("flag_debug", False))
             self.extra_flags.set(data.get("extra_flags", ""))
             self.is_dark_mode.set(data.get("dark_mode", False))
+            self.com_port.set(data.get("com_port", ""))
+            self.speed_mode.set(data.get("speed_mode", "Normal"))
         except Exception:
             pass
 
